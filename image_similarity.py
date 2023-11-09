@@ -6,6 +6,9 @@ from PIL import Image
 from sentence_transformers import SentenceTransformer, util
 
 
+Image.MAX_IMAGE_PIXELS = None
+
+
 print("="*80)
 print('Carregando CLIP Model...')
 model = SentenceTransformer('clip-ViT-L-14')
