@@ -1,8 +1,12 @@
 import os
 import glob
 import json
+import jinja2
+import pdfkit
+import shutil
 
 from PIL import Image
+from datetime import date
 from sentence_transformers import SentenceTransformer, util
 
 
@@ -15,14 +19,16 @@ model = SentenceTransformer('clip-ViT-L-14')
 print("="*80)
 print()
 
-novos_pronacs = ['C']
-
 working_directory = os.path.dirname(os.path.realpath(__file__))
-images_dir = os.path.join(working_directory, "pronacs_teste")
-results_dir = os.path.join(working_directory, "analise")
+sources_dir = os.path.join(working_directory, "novos")
+reports_dir = os.path.join(working_directory, "analise")
+verified_dir = os.path.join(working_directory, "verificados")
 
-if not os.path.exists(results_dir):
-    os.makedirs(results_dir)
+
+def get_date():
+    today = date.today()
+    return today.strftime("%d/%m/%Y")
+
 
 def load_images_from_directory(directory):
     image_paths = []
@@ -31,8 +37,8 @@ def load_images_from_directory(directory):
     return image_paths
 
 
-def find_duplicates_and_similar_images(pronac, image_paths1, image_paths2):
-    duplicates = []
+def find_duplicates_and_similar_images(image_paths1, image_paths2):
+    similaridades = []
     threshold = 0.75
 
     encoded_images1 = model.encode([Image.open(filepath) for filepath in image_paths1], batch_size=128, convert_to_tensor=True)
@@ -43,56 +49,118 @@ def find_duplicates_and_similar_images(pronac, image_paths1, image_paths2):
     for i in range(len(encoded_images1)):
         for j in range(len(encoded_images2)):
             if (results[i, j] >= threshold):
-                duplicates.append({
-                                  "pronac": pronac,
+                similaridades.append({
                                   "image1": image_paths1[i],
                                   "image2": image_paths2[j],
-                                  "score": results[i, j].item()
+                                  "score": int(results[i, j].item() * 100)
                                   })
-    return duplicates
+    return similaridades
+
+
+def render_html(pronac, analisados, similares, out_file):
+    """
+    Render html page using jinja based on templates/relatorio.html.jinja
+    """
+    template_file = "relatorio.html.jinja"
+    template_loader = jinja2.FileSystemLoader(searchpath="./templates")
+    template_env = jinja2.Environment(loader=template_loader)
+    
+    template = template_env.get_template(template_file)
+    output_text = template.render(
+        pronac=pronac,
+        date=get_date(),
+        analisados=analisados,
+        similares=similares
+        )
+
+    print(f"Salvando arquivo {out_file}.html ... ", end="")
+    with open(out_file + ".html", "w+") as html_file:
+        html_file.write(output_text)
+    print("[DONE]")
+
+    print(f"Salvando arquivo {out_file}.pdf ... ", end="")
+    html2pdf(out_file + ".html", out_file + ".pdf")
+
+
+def html2pdf(html_path, pdf_path):
+    """
+    Convert html to pdf using pdfkit which is a wrapper of wkhtmltopdf
+    """
+    options = {
+        'page-size': 'A4',
+        'margin-top': '2cm',
+        'margin-right': '2cm',
+        'margin-bottom': '2cm',
+        'margin-left': '2cm',
+        'encoding': "UTF-8",
+        'enable-local-file-access': ''
+    }
+
+    with open(html_path) as f:
+        pdfkit.from_file(f, pdf_path, options=options, verbose=True)
 
 
 if __name__ == "__main__":
 
-    data = []
-    for i, novo_pronac in enumerate(novos_pronacs):
-        out_file = os.path.join(results_dir, novo_pronac + ".json")
+    if not os.path.exists(reports_dir):
+        os.makedirs(reports_dir)
 
-        image_paths1 = load_images_from_directory(os.path.join(images_dir, novo_pronac))
-        print("="*30, novo_pronac, "="*30)
-        print(f"Encontrado {len(image_paths1)} imagens em {novo_pronac}")
+    if not os.path.exists(verified_dir):
+        os.makedirs(verified_dir)
 
-        if len(image_paths1) > 0:
+    with os.scandir(sources_dir) as sit:
+        for i, novo_pronac in enumerate(sit):
+            similares = []
+            analisados = []
 
-            if len(novos_pronacs) > 1:
-                print("Comparando com novos pronacs")
-                for j in range(i + 1, len(novos_pronacs)):
-                    image_paths2 = load_images_from_directory(novos_pronacs[j])
-            
-                    print("-"*80)
-                    print(f"Encontrado {len(image_paths2)} imagens em {novos_pronacs[j]}")
+            source_dir = os.path.join(sources_dir, novo_pronac)
+            out_file = os.path.join(reports_dir, novo_pronac.name)
 
-                    if len(image_paths2) > 0:
-                        print(f'Buscando duplicatas entre {novo_pronac} e {novos_pronacs[j]}...')
-                        data.extend(find_duplicates_and_similar_images(novos_pronacs[j], image_paths1, image_paths2))
+            image_paths1 = load_images_from_directory(source_dir)
+            print("="*30, novo_pronac.name, "="*30)
+            print(f"Encontrado {len(image_paths1)} imagens em {novo_pronac.name}")
 
-            print("Comparando com pronacs antigos")
-            with os.scandir(images_dir) as it:
-                for entry in it:
-                    if not entry.name in novos_pronacs:
-                        image_paths2 = load_images_from_directory(entry)
+            if len(image_paths1) > 0:
+
+                print("Comparando com pronacs antigos")
+                with os.scandir(verified_dir) as it:
+                    for velho_pronac in it:
+                        image_paths2 = load_images_from_directory(velho_pronac)
         
                         print("-"*80)
-                        print(f"Encontrado {len(image_paths2)} imagens em {entry.name}")
+                        print(f"Encontrado {len(image_paths2)} imagens em {velho_pronac.name}")
 
+                        similaridades = []
                         if len(image_paths2) > 0:
-                            print(f'Buscando duplicatas entre {novo_pronac} e {entry.name}...')
-                            data.extend(find_duplicates_and_similar_images(entry.name, image_paths1, image_paths2))
+                            print(f'Buscando similaridades entre {novo_pronac.name} e {velho_pronac.name}...')
+                            similaridades = find_duplicates_and_similar_images(image_paths1, image_paths2)
+                            similares.append({
+                                             "pronac": velho_pronac.name,
+                                             "similaridades": similaridades
+                                             })
 
-            print("-"*80)
-            print(f"Salvando arquivo {out_file}... ", end="")
-            with open(out_file, 'w') as fp:
-                json.dump(data, fp, indent=4)
+                        analisados.append({
+                                          "pronac": velho_pronac.name,
+                                          "arquivos": len(image_paths2),
+                                          "similaridades": len(similaridades)
+                                          })
+
+                print("-"*80)
+            else:
+                print("Nada a fazer")
+
+            json_data = {
+                "analisados": analisados,
+                "similares": similares
+            }
+
+            print(f"Salvando arquivo {out_file}.json ... ", end="")
+            with open(out_file + '.json', 'w') as fp:
+                json.dump(json_data, fp, indent=4)
             print("[DONE]")
-        else:
-            print("Nada a fazer")
+
+            render_html(novo_pronac.name, analisados, similares, out_file)
+
+            print(f"Movendo {source_dir} para {verified_dir} ", end="")
+            shutil.move(source_dir, verified_dir)
+            print("[DONE]")
