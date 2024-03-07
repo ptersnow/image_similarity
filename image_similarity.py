@@ -12,6 +12,7 @@ from sentence_transformers import SentenceTransformer, util
 
 Image.MAX_IMAGE_PIXELS = None
 
+threshold = 0.75
 
 print("="*80)
 print('Carregando CLIP Model...')
@@ -35,26 +36,6 @@ def load_images_from_directory(directory):
     for ext in ('**/*.jpg', '**/*.jpeg', '**/*.png', '**/*.gif'):
         image_paths.extend(glob.glob(os.path.join(directory, ext), recursive=True))
     return image_paths
-
-
-def find_duplicates_and_similar_images(image_paths1, image_paths2):
-    similaridades = []
-    threshold = 0.75
-
-    encoded_images1 = model.encode([Image.open(filepath) for filepath in image_paths1], batch_size=128, convert_to_tensor=True)
-    encoded_images2 = model.encode([Image.open(filepath) for filepath in image_paths2], batch_size=128, convert_to_tensor=True)
-
-    results = util.cos_sim(encoded_images1, encoded_images2)
-
-    for i in range(len(encoded_images1)):
-        for j in range(len(encoded_images2)):
-            if (results[i, j] >= threshold):
-                similaridades.append({
-                                  "image1": image_paths1[i],
-                                  "image2": image_paths2[j],
-                                  "score": int(results[i, j].item() * 100)
-                                  })
-    return similaridades
 
 
 def render_html(pronac, analisados, similares, out_file):
@@ -100,16 +81,9 @@ def html2pdf(html_path, pdf_path):
         pdfkit.from_file(f, pdf_path, options=options, verbose=True)
 
 
-if __name__ == "__main__":
-
-    if not os.path.exists(reports_dir):
-        os.makedirs(reports_dir)
-
-    if not os.path.exists(verified_dir):
-        os.makedirs(verified_dir)
-
+def find_similarities():
     with os.scandir(sources_dir) as sit:
-        for i, novo_pronac in enumerate(sit):
+        for novo_pronac in enumerate(sit):
             similares = []
             analisados = []
 
@@ -122,6 +96,8 @@ if __name__ == "__main__":
 
             if len(image_paths1) > 0:
 
+                new_embeds = model.encode([Image.open(filepath) for filepath in image_paths1], batch_size=128, convert_to_tensor=True)
+
                 print("Comparando com pronacs antigos")
                 with os.scandir(verified_dir) as it:
                     for velho_pronac in it:
@@ -130,20 +106,32 @@ if __name__ == "__main__":
                         print("-"*80)
                         print(f"Encontrado {len(image_paths2)} imagens em {velho_pronac.name}")
 
-                        similaridades = []
                         if len(image_paths2) > 0:
                             print(f'Buscando similaridades entre {novo_pronac.name} e {velho_pronac.name}...')
-                            similaridades = find_duplicates_and_similar_images(image_paths1, image_paths2)
+                            old_embeds = model.encode([Image.open(filepath) for filepath in image_paths2], batch_size=128, convert_to_tensor=True)
+
+                            results = util.cos_sim(new_embeds, old_embeds)
+
+                            similaridades = []
+                            for i in range(len(new_embeds)):
+                                for j in range(len(old_embeds)):
+                                    if (results[i, j] >= threshold):
+                                        similaridades.append({
+                                            "image1": image_paths1[i],
+                                            "image2": image_paths2[j],
+                                            "score": int(results[i, j].item() * 100)
+                                        })
+
                             similares.append({
-                                             "pronac": velho_pronac.name,
-                                             "similaridades": similaridades
-                                             })
+                                "pronac": velho_pronac.name,
+                                "similaridades": similaridades
+                            })
 
                         analisados.append({
-                                          "pronac": velho_pronac.name,
-                                          "arquivos": len(image_paths2),
-                                          "similaridades": len(similaridades)
-                                          })
+                            "pronac": velho_pronac.name,
+                            "arquivos": len(image_paths2),
+                            "similaridades": len(similaridades)
+                        })
 
                 print("-"*80)
             else:
@@ -164,3 +152,14 @@ if __name__ == "__main__":
             print(f"Movendo {source_dir} para {verified_dir} ", end="")
             shutil.move(source_dir, verified_dir)
             print("[DONE]")
+
+
+if __name__ == "__main__":
+
+    if not os.path.exists(reports_dir):
+        os.makedirs(reports_dir)
+
+    if not os.path.exists(verified_dir):
+        os.makedirs(verified_dir)
+
+    find_similarities()
