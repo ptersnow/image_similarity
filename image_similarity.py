@@ -23,6 +23,7 @@ print()
 working_directory = os.path.dirname(os.path.realpath(__file__))
 sources_dir = os.path.join(working_directory, "novos")
 reports_dir = os.path.join(working_directory, "analise")
+embeddings_dir = os.path.join(working_directory, "embeddings")
 verified_dir = os.path.join(working_directory, "verificados")
 
 
@@ -36,6 +37,27 @@ def load_images_from_directory(directory):
     for ext in ('**/*.jpg', '**/*.jpeg', '**/*.png', '**/*.gif'):
         image_paths.extend(glob.glob(os.path.join(directory, ext), recursive=True))
     return image_paths
+
+
+def generateEmbeddings(pronac, image_paths):
+    if not os.path.exists(os.path.join(embeddings_dir, f"{pronac}.json")):
+        print(f"Gerando embeddings para {pronac}... ", end="")
+        embeddings = model.encode([Image.open(filepath) for filepath in image_paths], batch_size=128, convert_to_tensor=True)
+        json_data = {
+            "images": image_paths,
+            "embeddings": embeddings.tolist()
+        }
+
+        with open(os.path.join(embeddings_dir, f"{pronac}.json"), 'w') as fp:
+            json.dump(json_data, fp, indent=4)
+
+        print("[DONE]")
+    else:
+        json_data = json.load(open(os.path.join(embeddings_dir, f"{pronac}.json"), "r"))
+        embeddings = json_data["embeddings"]
+    
+    return embeddings
+
 
 
 def render_html(pronac, analisados, similares, out_file):
@@ -83,7 +105,7 @@ def html2pdf(html_path, pdf_path):
 
 def find_similarities():
     with os.scandir(sources_dir) as sit:
-        for novo_pronac in enumerate(sit):
+        for novo_pronac in sit:
             similares = []
             analisados = []
 
@@ -95,8 +117,7 @@ def find_similarities():
             print(f"Encontrado {len(image_paths1)} imagens em {novo_pronac.name}")
 
             if len(image_paths1) > 0:
-
-                new_embeds = model.encode([Image.open(filepath) for filepath in image_paths1], batch_size=128, convert_to_tensor=True)
+                new_embeddings = generateEmbeddings(novo_pronac.name, image_paths1)
 
                 print("Comparando com pronacs antigos")
                 with os.scandir(verified_dir) as it:
@@ -106,15 +127,15 @@ def find_similarities():
                         print("-"*80)
                         print(f"Encontrado {len(image_paths2)} imagens em {velho_pronac.name}")
 
+                        similaridades = []
                         if len(image_paths2) > 0:
+                            old_embeddings = generateEmbeddings(velho_pronac.name, image_paths2)
+
                             print(f'Buscando similaridades entre {novo_pronac.name} e {velho_pronac.name}...')
-                            old_embeds = model.encode([Image.open(filepath) for filepath in image_paths2], batch_size=128, convert_to_tensor=True)
+                            results = util.cos_sim(new_embeddings, old_embeddings)
 
-                            results = util.cos_sim(new_embeds, old_embeds)
-
-                            similaridades = []
-                            for i in range(len(new_embeds)):
-                                for j in range(len(old_embeds)):
+                            for i in range(len(new_embeddings)):
+                                for j in range(len(old_embeddings)):
                                     if (results[i, j] >= threshold):
                                         similaridades.append({
                                             "image1": image_paths1[i],
@@ -162,4 +183,8 @@ if __name__ == "__main__":
     if not os.path.exists(verified_dir):
         os.makedirs(verified_dir)
 
+    if not os.path.exists(embeddings_dir):
+        os.makedirs(embeddings_dir)
+
     find_similarities()
+            
