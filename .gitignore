@@ -1,6 +1,8 @@
- # Environments
+# Environments
+codealike.json
 venv/
 novos/
 verificados/
 analise/
 embeddings/
+pronacs/
